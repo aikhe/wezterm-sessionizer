@@ -116,4 +116,39 @@ function platform.is_shell(proc)
 	return name ~= nil and known_shells[name] == true
 end
 
+---Percent-decode a URI path.
+---@param s string
+---@return string
+local function url_decode(s)
+	return (s:gsub("%%(%x%x)", function(hex)
+		return string.char(tonumber(hex, 16))
+	end))
+end
+
+---Turn a cwd URI into a native path for spawn calls.
+---Handles file:///C:/dir/, file:///C:/dir and file://host/dir.
+---Returns nil when the cwd is unknown so callers fall back to defaults.
+---@param cwd_uri string|nil
+---@return string|nil
+function platform.normalize_cwd(cwd_uri)
+	if not cwd_uri or cwd_uri == "" then
+		return nil
+	end
+	local path = url_decode(cwd_uri)
+	path = path:gsub("^file://[^/]*", "")
+	if platform.is_windows then
+		local drive = path:match("^/([A-Za-z]:.*)$")
+		if drive then
+			path = drive
+		end
+	end
+	if #path > 1 then
+		path = path:gsub("[/\\]+$", "")
+	end
+	if path == "" then
+		return nil
+	end
+	return path
+end
+
 return platform

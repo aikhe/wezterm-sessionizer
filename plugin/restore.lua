@@ -8,41 +8,6 @@ local platform = require("platform")
 
 local restore = {}
 
----Percent-decode a URI path.
----@param s string
----@return string
-local function url_decode(s)
-	return (s:gsub("%%(%x%x)", function(hex)
-		return string.char(tonumber(hex, 16))
-	end))
-end
-
----Turn a saved cwd URI into a native path for spawn calls.
----Handles file:///C:/dir/, file:///C:/dir and file://host/dir.
----Returns nil when the cwd is unknown so callers fall back to defaults.
----@param cwd_uri string|nil
----@return string|nil
-function restore.normalize_cwd(cwd_uri)
-	if not cwd_uri or cwd_uri == "" then
-		return nil
-	end
-	local path = url_decode(cwd_uri)
-	path = path:gsub("^file://[^/]*", "")
-	if platform.is_windows then
-		local drive = path:match("^/([A-Za-z]:.*)$")
-		if drive then
-			path = drive
-		end
-	end
-	if #path > 1 then
-		path = path:gsub("[/\\]+$", "")
-	end
-	if path == "" then
-		return nil
-	end
-	return path
-end
-
 ---Re-run a non-shell foreground process, shells are already running.
 ---@param pane Pane
 ---@param pane_data SnapshotPaneData
@@ -123,7 +88,7 @@ end
 ---Split right to create hpane next to the active pane.
 local function split_horizontally(tab, tab_width, ipane, panes, ipanes, hpane)
 	local available = tab_width - ipane.left
-	local cwd = restore.normalize_cwd(hpane.cwd)
+	local cwd = platform.normalize_cwd(hpane.cwd)
 	local args = {
 		direction = "Right",
 		size = 1 - ((hpane.left - ipane.left) / available),
@@ -140,7 +105,7 @@ end
 ---Split downward to create vpane below the active pane.
 local function split_vertically(tab, tab_height, ipane, panes, ipanes, vpane)
 	local available = tab_height - ipane.top
-	local cwd = restore.normalize_cwd(vpane.cwd)
+	local cwd = platform.normalize_cwd(vpane.cwd)
 	local args = {
 		direction = "Bottom",
 		size = 1 - ((vpane.top - ipane.top) / available),
@@ -202,7 +167,7 @@ local function restore_tab(window, tab_data)
 		return nil
 	end
 	local ok, new_tab = pcall(function()
-		local cwd = restore.normalize_cwd(tab_data.panes[1].cwd)
+		local cwd = platform.normalize_cwd(tab_data.panes[1].cwd)
 		local tab
 		if cwd then
 			tab = window:mux_window():spawn_tab({ cwd = cwd })
@@ -261,13 +226,32 @@ local function close_tab(window, old_tab)
 	end
 end
 
+---The single tab when the window holds exactly one, no questions asked.
+---Used for just-created workspaces whose panes may not report yet.
+---@param window Window
+---@return MuxTab|nil
+local function first_tab(window)
+	local ok, tab = pcall(function()
+		local tabs = window:mux_window():tabs()
+		if #tabs ~= 1 then
+			return nil
+		end
+		return tabs[1]
+	end)
+	if ok then
+		return tab
+	end
+	return nil
+end
+
 ---Recreate all saved windows. Pristine starting tabs are replaced, live
 ---content is kept and the session lands alongside it.
 ---@param window Window
 ---@param workspace_name string
 ---@param data SnapshotData
+---@param fresh boolean just-switched workspace, replace its single tab blindly
 ---@return boolean
-function restore.run(window, workspace_name, data)
+function restore.run(window, workspace_name, data, fresh)
 	if not data or not data.windows or #data.windows == 0 then
 		return false
 	end
@@ -280,7 +264,12 @@ function restore.run(window, workspace_name, data)
 				target = w:gui_window()
 			end
 			local active_tab = nil
-			local old_tab = pristine_tab(target)
+			local old_tab = nil
+			if fresh then
+				old_tab = first_tab(target)
+			else
+				old_tab = pristine_tab(target)
+			end
 			local created_before = created
 			for _, tab_data in ipairs(win_data.tabs) do
 				local tab = restore_tab(target, tab_data)
