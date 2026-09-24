@@ -111,7 +111,11 @@ function store.list(dir)
 		end
 	end
 	table.sort(choices, function(a, b)
-		return a.id < b.id
+		local al, bl = a.id:lower(), b.id:lower()
+		if al == bl then
+			return a.id < b.id
+		end
+		return al < bl
 	end)
 	return choices
 end
