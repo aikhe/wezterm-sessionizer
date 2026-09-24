@@ -33,7 +33,6 @@ local platform = require("platform")
 local store = require("store")
 local snapshot = require("snapshot")
 local restore = require("restore")
-local jumper = require("jumper")
 
 ---@class WezTermSessionizer
 local pub = {}
@@ -42,20 +41,24 @@ pub.version = "0.1.0-dev"
 
 ---@class SessionizerConfig
 ---@field save_state_dir string|nil absolute path, nil means platform default
----@field search_roots string[]|nil directories the jumper scans, nil means unconfigured
----@field search_depth number max scan depth below each root
 pub.config = {
 	save_state_dir = nil,
-	search_roots = nil,
-	search_depth = 1,
 }
 
 local state_dir = platform.default_state_dir()
 local dir_ready = false
 
----Workspace name awaiting post-switch restore. Set by the jumper,
+---Workspace name awaiting post-switch restore. Set by the picker,
 ---consumed by the sessionizer.jump.restore event after the switch lands.
 local pending_jump_restore = nil
+
+---True when the pending jump creates a brand new workspace whose single
+---tab is disposable. The jumper sets this, the restore event consumes it.
+local pending_jump_fresh = false
+
+---Origin workspace the jump left. Cleaned up when it is unsaved scratch.
+---Set by the picker, consumed by the sessionizer.jump.restore event.
+local pending_jump_origin = nil
 
 ---@return string
 function pub.get_state_dir()
@@ -69,12 +72,31 @@ local function ensure_dir()
 	dir_ready = store.ensure_dir(state_dir)
 end
 
----Collect the active workspace and save it as JSON. Read-only against
----the terminal, the only write is the state file.
+---Name the session by its dir and save it as JSON. Resaving the same
+---dir updates the same file. The default workspace is never saved.
 ---@param window Window
 function pub.save_state(window)
 	ensure_dir()
+	local pane = window:active_pane()
+	if pane then
+		local cwd = pane:get_current_working_dir()
+		local path = cwd and platform.normalize_cwd(tostring(cwd)) or nil
+		if path then
+			local base = platform.basename(path)
+			local current = window:active_workspace()
+			if base ~= "" and base ~= current then
+				local ok, err = pcall(wezterm.mux.rename_workspace, current, base)
+				if not ok then
+					wezterm.log_info("save: keeping workspace name: " .. tostring(err))
+				end
+			end
+		end
+	end
 	local data = snapshot.collect(window)
+	if data.name == "default" then
+		window:toast_notification("wezterm-sessionizer", "Cannot save the default workspace", nil, 3000)
+		return
+	end
 	if #data.windows == 0 then
 		window:toast_notification("wezterm-sessionizer", "Nothing to save: no GUI windows", nil, 3000)
 		return
@@ -109,52 +131,90 @@ function pub.restore_state(window)
 	end
 end
 
----Fuzzy-find a project dir and switch to it as a workspace.
----When the workspace has saved state, offers a restore via toast.
+---True when a workspace with this name already exists.
+---@param name string
+---@return boolean
+local function workspace_exists(name)
+	local ok, names = pcall(wezterm.mux.get_workspace_names)
+	if not ok or not names then
+		return true
+	end
+	for _, n in ipairs(names) do
+		if n == name then
+			return true
+		end
+	end
+	return false
+end
+
+---Close the origin workspace when it is unsaved scratch: exactly one
+---window holding one tab with one shell pane. Live work is never touched.
+---@param origin string
+local function cleanup_origin_workspace(origin)
+	local ok, err = pcall(function()
+		for _, mux_win in ipairs(wezterm.mux.all_windows()) do
+			if mux_win:get_workspace() == origin then
+				local tabs = mux_win:tabs()
+				if #tabs ~= 1 then
+					return
+				end
+				local panes = tabs[1]:panes()
+				if #panes ~= 1 then
+					return
+				end
+				local proc = panes[1]:get_foreground_process_name() or ""
+				if not platform.is_shell(proc) then
+					return
+				end
+				panes[1]:send_text("exit\r")
+			end
+		end
+	end)
+	if not ok then
+		wezterm.log_info("jump cleanup skipped: " .. tostring(err))
+	end
+end
+
+---Pick a saved session and switch to it, restoring its layout.
 ---@param window Window
 ---@param pane Pane
 function pub.jump_to_dir(window, pane)
 	ensure_dir()
-	local roots = pub.config.search_roots
-	if not roots or #roots == 0 then
-		window:toast_notification("wezterm-sessionizer", "No search roots configured", nil, 3000)
-		return
-	end
-	local dirs = jumper.find_dirs(roots, pub.config.search_depth or 3)
-	if #dirs == 0 then
-		window:toast_notification("wezterm-sessionizer", "No directories found", nil, 3000)
+	local entries = store.list(state_dir)
+	if #entries == 0 then
+		window:toast_notification("wezterm-sessionizer", "No saved sessions", nil, 3000)
 		return
 	end
 	local choices = {}
-	for _, dir in ipairs(dirs) do
-		table.insert(choices, { id = dir, label = platform.basename(dir) .. "  " .. dir })
+	for _, entry in ipairs(entries) do
+		table.insert(choices, { id = entry.id, label = entry.label })
 	end
 	window:perform_action(
 		act.InputSelector({
-			title = "Jump to directory",
-			description = "Enter = switch workspace, Esc = cancel, / = filter",
-			fuzzy_description = "Filter directories: ",
+			title = "Jump to session",
+			description = "Enter = switch and restore, Esc = cancel, / = filter",
+			fuzzy_description = "Filter sessions: ",
 			choices = choices,
 			fuzzy = true,
 			action = wezterm.action_callback(function(inner_window, _, id)
 				if not id then
 					return
 				end
-				local name = platform.basename(id)
-				local data = store.load(store.state_file_for(state_dir, name))
-				if data and data.windows and #data.windows > 0 then
-					-- Switch first, restore in a later event. The switch
-					-- only applies after this callback returns, so an
-					-- inline restore would land in the origin workspace.
-					pending_jump_restore = name
-					inner_window:perform_action(act.SwitchToWorkspace({ name = name }), pane)
-					inner_window:perform_action(act.EmitEvent("sessionizer.jump.restore"), pane)
-					return
+				-- Switch first, restore in a later event. The switch
+				-- only applies after this callback returns, so an
+				-- inline restore would land in the origin workspace.
+				pending_jump_restore = id
+				pending_jump_fresh = not workspace_exists(id)
+				local origin = inner_window:active_workspace()
+				pending_jump_origin = nil
+				if origin ~= id then
+					local origin_data = store.load(store.state_file_for(state_dir, origin))
+					if not (origin_data and origin_data.windows and #origin_data.windows > 0) then
+						pending_jump_origin = origin
+					end
 				end
-				inner_window:perform_action(
-					act.SwitchToWorkspace({ name = name, spawn = { cwd = id } }),
-					pane
-				)
+				inner_window:perform_action(act.SwitchToWorkspace({ name = id }), pane)
+				inner_window:perform_action(act.EmitEvent("sessionizer.jump.restore"), pane)
 			end),
 		}),
 		pane
@@ -177,19 +237,6 @@ function pub.apply_to_config(config, user_config)
 	end
 	pub.config.save_state_dir = state_dir
 	dir_ready = false
-
-	if type(user_config.search_roots) == "table" then
-		pub.config.search_roots = user_config.search_roots
-	else
-		pub.config.search_roots = nil
-	end
-	local depth = tonumber(user_config.search_depth) or 1
-	if depth < 1 then
-		depth = 1
-	elseif depth > 8 then
-		depth = 8
-	end
-	pub.config.search_depth = depth
 end
 
 wezterm.on("sessionizer.save", function(window)
@@ -203,7 +250,11 @@ wezterm.on("sessionizer.jump", function(window, pane)
 end)
 wezterm.on("sessionizer.jump.restore", function(window)
 	local name = pending_jump_restore
+	local fresh = pending_jump_fresh
+	local origin = pending_jump_origin
 	pending_jump_restore = nil
+	pending_jump_fresh = false
+	pending_jump_origin = nil
 	if not name then
 		return
 	end
@@ -216,7 +267,7 @@ wezterm.on("sessionizer.jump.restore", function(window)
 	if not data or not data.windows or #data.windows == 0 then
 		return
 	end
-	if restore.run(window, name, data) then
+	if restore.run(window, name, data, fresh) then
 		window:toast_notification(
 			"wezterm-sessionizer",
 			"Restored " .. name .. " (" .. snapshot.summarize(data) .. ")",
@@ -226,6 +277,18 @@ wezterm.on("sessionizer.jump.restore", function(window)
 	else
 		window:toast_notification("wezterm-sessionizer", "Restore failed for " .. name, nil, 4000)
 	end
+	if origin and origin ~= name then
+		cleanup_origin_workspace(origin)
+	end
+end)
+
+-- Workspace name at the bottom left, no status plugin needed.
+wezterm.on("update-status", function(window, _)
+	window:set_left_status(wezterm.format({
+		{ Background = { Color = "#101010" } },
+		{ Foreground = { Color = "#939393" } },
+		{ Text = "  " .. window:active_workspace() .. "  " },
+	}))
 end)
 
 return pub
