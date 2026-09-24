@@ -3,7 +3,7 @@
 local restore = {}
 
 ---Recreate workspace layout. Not implemented yet.
----@param window any
+---@param window Window
 ---@param data table
 ---@return boolean
 function restore.run(window, data)

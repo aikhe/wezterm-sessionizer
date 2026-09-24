@@ -4,7 +4,7 @@
 local snapshot = {}
 
 ---Collect current workspace data. Not implemented yet.
----@param window any
+---@param window Window
 ---@return nil
 function snapshot.collect(window)
 	_ = window

@@ -1,0 +1,15 @@
+{
+	"$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+	"runtime": {
+		"version": "Lua 5.4",
+		"path": ["plugin/?.lua", "?.lua", "?/init.lua"]
+	},
+	"diagnostics": {
+		"enable": true
+	},
+	"workspace": {
+		"checkThirdParty": false,
+		"useGitIgnore": false,
+		"library": ["reference/wezterm-types/lua", "plugin"]
+	}
+}

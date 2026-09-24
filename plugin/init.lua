@@ -58,6 +58,7 @@ local function ensure_dir()
 end
 
 ---Stub: snapshot phase comes next. Safe to bind, just notifies.
+---@param window Window
 function pub.save_state(window)
 	ensure_dir()
 	window:toast_notification("wezterm-sessionizer", "save not implemented yet (scaffold)", nil, 2000)
@@ -65,6 +66,7 @@ function pub.save_state(window)
 end
 
 ---Stub: restore phase comes after snapshot.
+---@param window Window
 function pub.restore_state(window)
 	ensure_dir()
 	window:toast_notification("wezterm-sessionizer", "restore not implemented yet (scaffold)", nil, 2000)
@@ -72,6 +74,8 @@ function pub.restore_state(window)
 end
 
 ---Stub: jumper phase comes after restore.
+---@param window Window
+---@param pane Pane
 function pub.jump_to_dir(window, pane)
 	ensure_dir()
 	window:toast_notification("wezterm-sessionizer", "jump not implemented yet (scaffold)", nil, 2000)
@@ -81,7 +85,7 @@ end
 
 ---Wire the plugin into wezterm config. Adds no keys by default in scaffold
 ---so your existing config keeps working. Pass explicit keys yourself.
----@param config table wezterm config
+---@param config Config wezterm config
 ---@param user_config table|nil
 function pub.apply_to_config(config, user_config)
 	user_config = user_config or {}
