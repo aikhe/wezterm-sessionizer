@@ -31,6 +31,7 @@ enable_sub_modules()
 local platform = require("platform")
 local store = require("store")
 local snapshot = require("snapshot")
+local restore = require("restore")
 
 ---@class WezTermSessionizer
 local pub = {}
@@ -78,12 +79,24 @@ function pub.save_state(window)
 	end
 end
 
----Stub: restore phase comes after snapshot.
+---Load the saved state for the active workspace and recreate it.
+---Saved tabs spawn as new tabs, the tab you start from is left alone.
 ---@param window Window
 function pub.restore_state(window)
 	ensure_dir()
-	window:toast_notification("wezterm-sessionizer", "restore not implemented yet (scaffold)", nil, 2000)
-	wezterm.log_info("restore_state stub, dir=" .. state_dir)
+	local name = window:active_workspace()
+	local data = store.load(store.state_file_for(state_dir, name))
+	if not data or not data.windows or #data.windows == 0 then
+		window:toast_notification("wezterm-sessionizer", "No saved state for " .. name, nil, 4000)
+		return
+	end
+	if restore.run(window, name, data) then
+		local summary = snapshot.summarize(data)
+		window:toast_notification("wezterm-sessionizer", "Restored " .. name .. " (" .. summary .. ")", nil, 4000)
+		wezterm.log_info("restored " .. name .. " (" .. summary .. ")")
+	else
+		window:toast_notification("wezterm-sessionizer", "Restore failed for " .. name, nil, 4000)
+	end
 end
 
 ---Stub: jumper phase comes after restore.
