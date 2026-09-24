@@ -30,6 +30,7 @@ enable_sub_modules()
 
 local platform = require("platform")
 local store = require("store")
+local snapshot = require("snapshot")
 
 ---@class WezTermSessionizer
 local pub = {}
@@ -57,12 +58,24 @@ local function ensure_dir()
 	dir_ready = store.ensure_dir(state_dir)
 end
 
----Stub: snapshot phase comes next. Safe to bind, just notifies.
+---Collect the active workspace and save it as JSON. Read-only against
+---the terminal, the only write is the state file.
 ---@param window Window
 function pub.save_state(window)
 	ensure_dir()
-	window:toast_notification("wezterm-sessionizer", "save not implemented yet (scaffold)", nil, 2000)
-	wezterm.log_info("save_state stub, dir=" .. state_dir)
+	local data = snapshot.collect(window)
+	if #data.windows == 0 then
+		window:toast_notification("wezterm-sessionizer", "Nothing to save: no GUI windows", nil, 3000)
+		return
+	end
+	local path = store.state_file_for(state_dir, data.name)
+	if store.save(data, path) then
+		local summary = snapshot.summarize(data)
+		window:toast_notification("wezterm-sessionizer", "Saved " .. data.name .. " (" .. summary .. ")", nil, 4000)
+		wezterm.log_info("saved " .. data.name .. " to " .. path .. " (" .. summary .. ")")
+	else
+		window:toast_notification("wezterm-sessionizer", "Save failed for " .. data.name, nil, 4000)
+	end
 end
 
 ---Stub: restore phase comes after snapshot.
