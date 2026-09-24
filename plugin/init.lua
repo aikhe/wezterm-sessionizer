@@ -41,8 +41,10 @@ pub.version = "0.1.0-dev"
 
 ---@class SessionizerConfig
 ---@field save_state_dir string|nil absolute path, nil means platform default
+---@field status_label boolean show workspace name bottom left, off where tabline owns status
 pub.config = {
 	save_state_dir = nil,
+	status_label = false,
 }
 
 local state_dir = platform.default_state_dir()
@@ -236,6 +238,7 @@ function pub.apply_to_config(config, user_config)
 		state_dir = platform.default_state_dir()
 	end
 	pub.config.save_state_dir = state_dir
+	pub.config.status_label = user_config.status_label == true
 	dir_ready = false
 end
 
@@ -248,6 +251,7 @@ end)
 wezterm.on("sessionizer.jump", function(window, pane)
 	pub.jump_to_dir(window, pane)
 end)
+wezterm.log_info("sessionizer loaded, state dir: " .. state_dir)
 wezterm.on("sessionizer.jump.restore", function(window)
 	local name = pending_jump_restore
 	local fresh = pending_jump_fresh
@@ -282,8 +286,12 @@ wezterm.on("sessionizer.jump.restore", function(window)
 	end
 end)
 
--- Workspace name at the bottom left, no status plugin needed.
+-- Workspace name at the bottom left, only when enabled. Tabline owns
+-- status in full setups, so this stays off unless opted in.
 wezterm.on("update-status", function(window, _)
+	if not pub.config.status_label then
+		return
+	end
 	window:set_left_status(wezterm.format({
 		{ Background = { Color = "#101010" } },
 		{ Foreground = { Color = "#939393" } },
