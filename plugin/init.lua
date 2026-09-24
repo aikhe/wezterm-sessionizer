@@ -31,7 +31,7 @@ enable_sub_modules()
 local platform = require("platform")
 local store = require("store")
 
----@class Sessionizer
+---@class WezTermSessionizer
 local pub = {}
 
 pub.version = "0.1.0-dev"
@@ -87,6 +87,8 @@ end
 ---so your existing config keeps working. Pass explicit keys yourself.
 ---@param config Config wezterm config
 ---@param user_config table|nil
+-- config is unused until the keybindings phase lands.
+---@diagnostic disable-next-line: unused-local
 function pub.apply_to_config(config, user_config)
 	user_config = user_config or {}
 

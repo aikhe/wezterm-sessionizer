@@ -10,6 +10,6 @@
 	"workspace": {
 		"checkThirdParty": false,
 		"useGitIgnore": false,
-		"library": ["reference/wezterm-types/lua", "plugin"]
+		"library": ["reference/wezterm-types/lua"]
 	}
 }
