@@ -3,6 +3,7 @@
 -- same workspace. Shell panes land in their cwd, anything else gets its
 -- saved process re-run with Enter.
 local wezterm = require("wezterm")
+local act = wezterm.action
 local platform = require("platform")
 
 local restore = {}
@@ -191,8 +192,8 @@ local function restore_panes(tab, tab_data)
 	end
 end
 
----Spawn one tab per saved tab. Leaves the pre-existing tab alone so a
----mid-restore failure never destroys the window you started from.
+---Spawn one tab per saved tab. Pristine leftovers are closed by the
+---caller after spawning, so failures never destroy the starting tab.
 ---@param window Window
 ---@param tab_data SnapshotTabData
 ---@return MuxTab|nil
@@ -222,8 +223,46 @@ local function restore_tab(window, tab_data)
 	return nil
 end
 
----Recreate all saved windows. First window lands in the current OS
----window as new tabs, the rest spawn fresh OS windows in the workspace.
+---The window's single tab when it holds one shell pane and nothing else.
+---Fresh switches and empty windows qualify, live work never does.
+---@param window Window
+---@return MuxTab|nil
+local function pristine_tab(window)
+	local ok, tab = pcall(function()
+		local tabs = window:mux_window():tabs()
+		if #tabs ~= 1 then
+			return nil
+		end
+		if #(tabs[1]:panes()) ~= 1 then
+			return nil
+		end
+		local proc = tabs[1]:panes()[1]:get_foreground_process_name() or ""
+		if not platform.is_shell(proc) then
+			return nil
+		end
+		return tabs[1]
+	end)
+	if ok then
+		return tab
+	end
+	return nil
+end
+
+---Close a pristine leftover tab. Never throws, litters on failure.
+---@param window Window
+---@param old_tab MuxTab
+local function close_tab(window, old_tab)
+	local ok, err = pcall(function()
+		old_tab:activate()
+		window:perform_action(act.CloseCurrentTab({ confirm = false }), window:active_pane())
+	end)
+	if not ok then
+		wezterm.log_info("restore: keeping leftover tab: " .. tostring(err))
+	end
+end
+
+---Recreate all saved windows. Pristine starting tabs are replaced, live
+---content is kept and the session lands alongside it.
 ---@param window Window
 ---@param workspace_name string
 ---@param data SnapshotData
@@ -232,6 +271,7 @@ function restore.run(window, workspace_name, data)
 	if not data or not data.windows or #data.windows == 0 then
 		return false
 	end
+	local created = 0
 	local ok, err = pcall(function()
 		for idx, win_data in ipairs(data.windows) do
 			local target = window
@@ -240,14 +280,22 @@ function restore.run(window, workspace_name, data)
 				target = w:gui_window()
 			end
 			local active_tab = nil
+			local old_tab = pristine_tab(target)
+			local created_before = created
 			for _, tab_data in ipairs(win_data.tabs) do
 				local tab = restore_tab(target, tab_data)
-				if tab and tab_data.is_active then
-					active_tab = tab
+				if tab then
+					created = created + 1
+					if tab_data.is_active then
+						active_tab = tab
+					end
 				end
 			end
 			if active_tab then
 				active_tab:activate()
+			end
+			if old_tab and created > created_before then
+				close_tab(target, old_tab)
 			end
 		end
 	end)
@@ -255,7 +303,8 @@ function restore.run(window, workspace_name, data)
 		wezterm.log_info("restore failed: " .. tostring(err))
 		return false
 	end
-	return true
+	wezterm.log_info("restore: created " .. created .. " tabs")
+	return created > 0
 end
 
 return restore
