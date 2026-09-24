@@ -139,7 +139,10 @@ config.inactive_pane_hsb = {
 	brightness = 1.0,
 }
 
-sessionizer.apply_to_config(config, {})
+sessionizer.apply_to_config(config, {
+	-- No tabline here, so the plugin draws the workspace label itself.
+	status_label = true,
+})
 
 -- Show resolved state dir on startup. Proves platform.lua works.
 wezterm.on("gui-startup", function()
