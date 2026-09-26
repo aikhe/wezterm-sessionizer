@@ -9,6 +9,7 @@ local platform = require("platform")
 local restore = {}
 
 ---Re-run a non-shell foreground process, shells are already running.
+---Quotes spaced paths for the fresh pane's shell, PowerShell needs & '...'.
 ---@param pane Pane
 ---@param pane_data SnapshotPaneData
 local function restore_process(pane, pane_data)
@@ -19,8 +20,16 @@ local function restore_process(pane, pane_data)
 	if platform.is_shell(proc) then
 		return
 	end
-	wezterm.log_info("restore: re-running " .. proc)
-	pane:send_text(proc .. "\r")
+	local shell_proc = nil
+	pcall(function()
+		shell_proc = pane:get_foreground_process_name()
+	end)
+	if shell_proc and shell_proc ~= "" and shell_proc == proc then
+		return
+	end
+	local cmd = platform.restore_command(proc, shell_proc)
+	wezterm.log_info("restore: re-running " .. cmd)
+	pane:send_text(cmd .. "\r")
 end
 
 ---Find pane data sitting right of the given one, the +1 is the cell border.
