@@ -159,6 +159,7 @@ config.keys = {
 	{ key = "s", mods = "CTRL|SHIFT", action = act.EmitEvent("sessionizer.save") },
 	{ key = "r", mods = "CTRL|SHIFT", action = act.EmitEvent("sessionizer.restore") },
 	{ key = "f", mods = "CTRL|SHIFT", action = act.EmitEvent("sessionizer.jump") },
+	{ key = "d", mods = "CTRL|SHIFT", action = act.EmitEvent("sessionizer.delete") },
 
 	-- Personal
 	{
