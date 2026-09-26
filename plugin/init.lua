@@ -177,7 +177,80 @@ local function cleanup_origin_workspace(origin)
 	end
 end
 
+---Sentinel row at the bottom of the jump picker. Opens the delete
+---picker instead of switching. A real workspace with this exact name
+---would be shadowed, accepted as negligible.
+local DELETE_SENTINEL = "__sessionizer_delete__"
+
+---Delete one saved session file and toast the outcome.
+---@param window Window
+---@param id string workspace name
+---@return boolean
+local function delete_saved_session(window, id)
+	ensure_dir()
+	local path = store.state_file_for(state_dir, id)
+	if store.delete(path) then
+		window:toast_notification("wezterm-sessionizer", "Deleted " .. id, nil, 3000)
+		wezterm.log_info("deleted " .. id .. " (" .. path .. ")")
+		return true
+	else
+		window:toast_notification("wezterm-sessionizer", "Delete failed for " .. id, nil, 3000)
+		return false
+	end
+end
+
+---Second picker listing saved sessions for deletion. Confirm with y
+---before removing. Reopens the jump picker when launched from there.
+---@param window Window
+---@param pane Pane
+---@param reopen_jump boolean
+local function open_delete_picker(window, pane, reopen_jump)
+	ensure_dir()
+	local entries = store.list(state_dir)
+	if #entries == 0 then
+		window:toast_notification("wezterm-sessionizer", "No saved sessions", nil, 3000)
+		return
+	end
+	local choices = {}
+	for _, entry in ipairs(entries) do
+		table.insert(choices, { id = entry.id, label = entry.label })
+	end
+	window:perform_action(
+		act.InputSelector({
+			title = "Delete session",
+			description = "Enter = delete, Esc = cancel, / = filter",
+			fuzzy_description = "Filter sessions: ",
+			choices = choices,
+			fuzzy = true,
+			action = wezterm.action_callback(function(inner_window, inner_pane, id)
+				if not id then
+					if reopen_jump then
+						pub.jump_to_dir(inner_window, inner_pane or pane)
+					end
+					return
+				end
+				inner_window:perform_action(
+					act.PromptInputLine({
+						description = "Delete '" .. id .. "'? Type y to confirm: ",
+						action = wezterm.action_callback(function(confirm_window, confirm_pane, line)
+							if line and (line:lower() == "y" or line:lower() == "yes") then
+								delete_saved_session(confirm_window, id)
+							end
+							if reopen_jump then
+								pub.jump_to_dir(confirm_window, confirm_pane or pane)
+							end
+						end),
+					}),
+					inner_pane or pane
+				)
+			end),
+		}),
+		pane
+	)
+end
+
 ---Pick a saved session and switch to it, restoring its layout.
+---Last row opens the delete picker.
 ---@param window Window
 ---@param pane Pane
 function pub.jump_to_dir(window, pane)
@@ -191,15 +264,20 @@ function pub.jump_to_dir(window, pane)
 	for _, entry in ipairs(entries) do
 		table.insert(choices, { id = entry.id, label = entry.label })
 	end
+	table.insert(choices, { id = DELETE_SENTINEL, label = "Delete a saved session..." })
 	window:perform_action(
 		act.InputSelector({
 			title = "Jump to session",
-			description = "Enter = switch and restore, Esc = cancel, / = filter",
+			description = "Enter = switch, pick Delete to remove, Esc = cancel, / = filter",
 			fuzzy_description = "Filter sessions: ",
 			choices = choices,
 			fuzzy = true,
-			action = wezterm.action_callback(function(inner_window, _, id)
+			action = wezterm.action_callback(function(inner_window, inner_pane, id)
 				if not id then
+					return
+				end
+				if id == DELETE_SENTINEL then
+					open_delete_picker(inner_window, inner_pane or pane, true)
 					return
 				end
 				-- Switch first, restore in a later event. The switch
@@ -221,6 +299,13 @@ function pub.jump_to_dir(window, pane)
 		}),
 		pane
 	)
+end
+
+---Pick a saved session and delete its file, with y confirmation.
+---@param window Window
+---@param pane Pane
+function pub.delete_session(window, pane)
+	open_delete_picker(window, pane, false)
 end
 
 ---Wire the plugin into wezterm config. Adds no keys by default in scaffold
@@ -250,6 +335,9 @@ wezterm.on("sessionizer.restore", function(window)
 end)
 wezterm.on("sessionizer.jump", function(window, pane)
 	pub.jump_to_dir(window, pane)
+end)
+wezterm.on("sessionizer.delete", function(window, pane)
+	pub.delete_session(window, pane)
 end)
 wezterm.log_info("sessionizer loaded, state dir: " .. state_dir)
 wezterm.on("sessionizer.jump.restore", function(window)
