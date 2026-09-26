@@ -125,6 +125,34 @@ local function url_decode(s)
 	end))
 end
 
+---Build shell text to re-run a saved process inside a fresh shell pane.
+---PowerShell echoes a bare quoted path instead of running it, so spaced
+---paths need `& '...'` there. Cmd runs `"..."`, POSIX shells run `'...'`.
+---Returns proc unchanged when it has no spaces or shell metachars.
+---@param proc string foreground process path to re-run
+---@param shell_proc string|nil foreground process of the fresh pane (the shell)
+---@return string
+function platform.restore_command(proc, shell_proc)
+	local needs_quote = proc:find("[%s\"'&()%[%]{}^<>|;]") ~= nil
+	if not needs_quote then
+		return proc
+	end
+	local name = platform.shell_name(shell_proc)
+	if name == "cmd" or name == "cmd.exe" then
+		return '"' .. proc:gsub('"', '""') .. '"'
+	end
+	if
+		name == "powershell"
+		or name == "powershell.exe"
+		or name == "pwsh"
+		or name == "pwsh.exe"
+		or (name == nil and platform.is_windows)
+	then
+		return "& '" .. proc:gsub("'", "''") .. "'"
+	end
+	return "'" .. proc:gsub("'", "'\\''") .. "'"
+end
+
 ---Turn a cwd URI into a native path for spawn calls.
 ---Handles file:///C:/dir/, file:///C:/dir and file://host/dir.
 ---Returns nil when the cwd is unknown so callers fall back to defaults.
